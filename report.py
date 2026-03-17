@@ -4,16 +4,16 @@ import requests
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
-# ── CONFIG ─────────────────────────────────────────────────────
+# CONFIG
 
 _raw_token = os.environ["SLACK_BOT_TOKEN"]
-SLACK_TOKEN = "xoxb" + _raw_token[4:31] + "bFqMGfkmHBzvLRtU1It2ptnt"  # hardcode prefix+suffix; only numeric middle from secret
+SLACK_TOKEN = "xoxb" + _raw_token[4:31] + "bFqMGfkmHBzvLRtU1It2ptnt"
 
 REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 1420
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "C0AGRE19V6U"  # testing-sefali
+OPS_CHANNEL_ID = "C0AGRE19V6U"  # testing-sefali
 
 AGE_THRESHOLD = 14  # days
 
@@ -31,15 +31,12 @@ AUTH_HEADERS = {
     "Content-Type": "application/json",
 }
 
+VALID_TASK_STATUSES = {"PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"}
 
-# ── FETCH REDASH DATA ──────────────────────────────────────────
+
+# FETCH REDASH DATA
 
 def fetch_redash():
-    """
-    POST max_age=0 to trigger fresh execution.
-    Poll /api/jobs/{id} until complete (up to 5 minutes).
-    Then fetch result from /api/query_results/{id}.
-    """
     url = f"{REDASH_BASE}/api/queries/{REDASH_QUERY_ID}/results"
     payload = {"parameters": PARAMETERS, "max_age": 0}
 
@@ -51,17 +48,15 @@ def fetch_redash():
     r.raise_for_status()
     resp = r.json()
 
-    # Immediate cached result
     if "query_result" in resp:
         rows = resp["query_result"]["data"]["rows"]
         print(f"Got immediate result: {len(rows)} rows")
         return rows
 
-    # Job queued — poll /api/jobs/{job_id} directly
     job_id = resp["job"]["id"]
     print(f"Query job queued (id={job_id}), polling /api/jobs/...")
 
-    for attempt in range(100):  # up to ~5 minutes (100 x 3s)
+    for attempt in range(100):  # up to ~5 minutes
         time.sleep(3)
         jr = requests.get(
             f"{REDASH_BASE}/api/jobs/{job_id}",
@@ -75,7 +70,7 @@ def fetch_redash():
 
         if status == 3:  # success
             result_id = job["query_result_id"]
-            print(f"  Job done — fetching result_id={result_id}")
+            print(f"  Job done -- fetching result_id={result_id}")
             rr = requests.get(
                 f"{REDASH_BASE}/api/query_results/{result_id}",
                 headers=AUTH_HEADERS,
@@ -92,11 +87,7 @@ def fetch_redash():
     raise Exception("Timed out after 5 minutes waiting for Redash query")
 
 
-# ── FILTER & AGGREGATE ─────────────────────────────────────────
-
-# Check Status codes from Redash URL
-VALID_TASK_STATUSES = {"PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"}
-
+# FILTER AND AGGREGATE
 
 def filter_and_aggregate(rows):
     all_checks = {}
@@ -128,19 +119,19 @@ def filter_and_aggregate(rows):
     return dict(groups), total_aged, total_all
 
 
-# ── BUILD SLACK MESSAGE ────────────────────────────────────────
+# BUILD SLACK MESSAGE
 
 def build_message(groups, total_aged, total_all):
     today = datetime.now(IST).strftime("%d %b %Y")
 
     lines = [
-        f"*:bar_chart: Daily Case Update \u2014 {today}*",
-        f"*Cases \u226514 days:* `{total_aged}` of `{total_all}` active checks",
+        f"*:bar_chart: Daily Case Update - {today}*",
+        f"*Cases >=14 days:* `{total_aged}` of `{total_all}` active checks",
         "",
     ]
 
     if not groups:
-        lines.append("_No cases found with age \u226514 days._")
+        lines.append("_No cases found with age >=14 days._")
     else:
         col1, col2, col3 = 22, 20, 7
         header = f"{'Verification':<{col1}} {'Type':<{col2}} {'Count':>{col3}}"
@@ -171,14 +162,12 @@ def build_message(groups, total_aged, total_all):
         lines.append("```")
 
     lines.append("")
-    lines.append(
-        "CC: <!subteam^S08T66C76CS> \u2014 please review and share your updates. :pray:"
-    )
+    lines.append("CC: <!subteam^S08T66C76CS> - please review and share your updates. :pray:")
 
     return "\n".join(lines)
 
 
-# ── POST TO SLACK ──────────────────────────────────────────────
+# POST TO SLACK
 
 def post_slack(text):
     r = requests.post(
@@ -198,7 +187,7 @@ def post_slack(text):
     return resp["ts"]
 
 
-# ── MAIN ───────────────────────────────────────────────────────
+# MAIN
 
 def main():
     rows = fetch_redash()
