@@ -18,7 +18,7 @@ REDASH_QUERY_ID = 1822
 REDASH_BASE = "https://redash.springworks.in"
 REDASH_REPORT_URL = f"{REDASH_BASE}/queries/{REDASH_QUERY_ID}"
 
-OPS_CHANNEL_ID = "C0AGRE19V6U"  # testing-sefali
+OPS_CHANNEL_ID = "CF0RH10M8"  # sv-in-ops
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
