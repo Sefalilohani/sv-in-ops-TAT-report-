@@ -7,7 +7,7 @@ from collections import defaultdict
 # ── CONFIG ─────────────────────────────────────────────────────
 
 _raw_token = os.environ["SLACK_BOT_TOKEN"]
-SLACK_TOKEN = "xoxb" + _raw_token[4:]  # fix autocapitalisation of first letter
+SLACK_TOKEN = "xoxb" + _raw_token[4:31] + "bFqMGfkmHBzvLRtU1It2ptnt"  # hardcode prefix+suffix; only numeric middle from secret
 
 REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 1420
@@ -94,11 +94,18 @@ def fetch_redash():
 
 # ── FILTER & AGGREGATE ─────────────────────────────────────────
 
+# Check Status codes from Redash URL
+VALID_TASK_STATUSES = {"PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"}
+
+
 def filter_and_aggregate(rows):
     all_checks = {}
     for row in rows:
         cid = row.get("Check ID")
         if cid is None:
+            continue
+        task_status = (row.get("Task Status") or "").upper()
+        if task_status not in VALID_TASK_STATUSES:
             continue
         if cid not in all_checks:
             all_checks[cid] = row
