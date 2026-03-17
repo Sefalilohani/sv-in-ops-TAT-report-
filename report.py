@@ -198,7 +198,7 @@ def build_message(groups_14plus, count_14plus, groups_7to14, count_7to14, total_
     )
     lines.append("")
     lines.append(
-        "<!subteam^S08T66C76CS> Please review and share an update on 14+ days checks."
+        "<!subteam^S04K9859L64> Please review and share an update on 14+ days checks."
     )
 
     return "\n".join(lines)
