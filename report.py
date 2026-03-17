@@ -107,14 +107,14 @@ def filter_and_aggregate(rows):
     count_7to14   = 0
 
     for row in all_checks.values():
-        age = row.get("Age") or 0
+        net_tat = row.get("Net TAT") or 0
         verification = (row.get("Verification") or "UNKNOWN").upper()
         v_type = (row.get("Verification Type") or "N/A").upper()
 
-        if age >= 14:
+        if net_tat >= 14:
             groups_14plus[verification][v_type] += 1
             count_14plus += 1
-        elif age >= 7:
+        elif net_tat >= 7:
             groups_7to14[verification][v_type] += 1
             count_7to14 += 1
 
