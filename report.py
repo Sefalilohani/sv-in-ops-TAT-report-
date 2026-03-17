@@ -13,7 +13,7 @@ REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 1420
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "C0AGRE19V6U"  # testing-sefali
+OPS_CHANNEL_ID = "CF0RH10M8"  # #sv-in-ops
 
 AGE_THRESHOLD = 14  # days
 
@@ -26,26 +26,25 @@ PARAMETERS = {
     "task_type": ["ALL"],
 }
 
+AUTH_HEADERS = {
+    "Authorization": f"Key {REDASH_API_KEY}",
+    "Content-Type": "application/json",
+}
+
 
 # ── FETCH REDASH DATA ──────────────────────────────────────────
 
 def fetch_redash():
     """
-    POST to /api/queries/{id}/results with max_age=0 to trigger fresh execution.
-    If result is cached, returns immediately.
-    If a job is queued, re-POST with max_age=60 until result is ready.
-    Works entirely with API key auth — no session cookie or /api/jobs polling needed.
+    POST max_age=0 to trigger fresh execution.
+    Poll /api/jobs/{id} until complete (up to 5 minutes).
+    Then fetch result from /api/query_results/{id}.
     """
-    headers = {
-        "Authorization": f"Key {REDASH_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
     url = f"{REDASH_BASE}/api/queries/{REDASH_QUERY_ID}/results"
     payload = {"parameters": PARAMETERS, "max_age": 0}
 
     print("Triggering Redash query refresh...")
-    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    r = requests.post(url, headers=AUTH_HEADERS, json=payload, timeout=30)
     print(f"POST status: {r.status_code}")
     if r.status_code not in (200, 201):
         print(f"Response: {r.text[:500]}")
@@ -58,37 +57,44 @@ def fetch_redash():
         print(f"Got immediate result: {len(rows)} rows")
         return rows
 
-    # Job queued — re-POST with max_age=60 to get result when ready
-    job_id = resp.get("job", {}).get("id", "unknown")
-    print(f"Query job queued (id={job_id}), polling for result...")
+    # Job queued — poll /api/jobs/{job_id} directly
+    job_id = resp["job"]["id"]
+    print(f"Query job queued (id={job_id}), polling /api/jobs/...")
 
-    poll_payload = {**payload, "max_age": 60}
-
-    for attempt in range(20):
+    for attempt in range(100):  # up to ~5 minutes (100 x 3s)
         time.sleep(3)
-        print(f"  Poll attempt {attempt + 1}/20...")
-        r2 = requests.post(url, headers=headers, json=poll_payload, timeout=30)
-        if r2.status_code not in (200, 201):
-            print(f"  Poll status {r2.status_code}: {r2.text[:200]}")
-            continue
-        resp2 = r2.json()
-        if "query_result" in resp2:
-            rows = resp2["query_result"]["data"]["rows"]
-            print(f"  Got result: {len(rows)} rows")
-            return rows
-        new_job = resp2.get("job", {})
-        print(f"  Still running, job status={new_job.get('status')}")
+        jr = requests.get(
+            f"{REDASH_BASE}/api/jobs/{job_id}",
+            headers=AUTH_HEADERS,
+            timeout=15,
+        )
+        jr.raise_for_status()
+        job = jr.json()["job"]
+        status = job["status"]
+        print(f"  attempt {attempt + 1}: job status={status}")
 
-    raise Exception("Timed out waiting for Redash query result after 60 seconds")
+        if status == 3:  # success
+            result_id = job["query_result_id"]
+            print(f"  Job done — fetching result_id={result_id}")
+            rr = requests.get(
+                f"{REDASH_BASE}/api/query_results/{result_id}",
+                headers=AUTH_HEADERS,
+                timeout=30,
+            )
+            rr.raise_for_status()
+            rows = rr.json()["query_result"]["data"]["rows"]
+            print(f"  Got {len(rows)} rows")
+            return rows
+
+        if status == 4:  # failed
+            raise Exception(f"Redash query failed: {job.get('error')}")
+
+    raise Exception("Timed out after 5 minutes waiting for Redash query")
 
 
 # ── FILTER & AGGREGATE ─────────────────────────────────────────
 
 def filter_and_aggregate(rows):
-    """
-    Deduplicate by Check ID, filter Age >= 14 days,
-    group by Verification x Verification Type.
-    """
     all_checks = {}
     for row in rows:
         cid = row.get("Check ID")
@@ -118,8 +124,7 @@ def filter_and_aggregate(rows):
 # ── BUILD SLACK MESSAGE ────────────────────────────────────────
 
 def build_message(groups, total_aged, total_all):
-    now = datetime.now(IST)
-    today = now.strftime("%d %b %Y")
+    today = datetime.now(IST).strftime("%d %b %Y")
 
     lines = [
         f"*:bar_chart: Daily Case Update \u2014 {today}*",
