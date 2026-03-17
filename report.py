@@ -1,17 +1,23 @@
 import os
-import requests
 import time
-from datetime import datetime
+import requests
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
-REDASH_URL = "https://redash.springworks.in"
-REDASH_API_KEY = os.environ["REDASH_API_KEY"]
-_raw_slack_token = os.environ["SLACK_BOT_TOKEN"]
-SLACK_BOT_TOKEN = "xoxb" + _raw_slack_token[4:]  # fix autocapitalisation of first letter
-SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "C0AGRE19V6U")  # testing-sefali
+# ── CONFIG ─────────────────────────────────────────────────────
 
-QUERY_ID = 1420
+_raw_token = os.environ["SLACK_BOT_TOKEN"]
+SLACK_TOKEN = "xoxb" + _raw_token[4:]  # fix autocapitalisation of first letter
+
+REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
+REDASH_QUERY_ID = 1420
+REDASH_BASE = "https://redash.springworks.in"
+
+OPS_CHANNEL_ID = "CF0RH10M8"  # #sv-in-ops
+
 AGE_THRESHOLD = 14  # days
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 PARAMETERS = {
     "CHECK Status": ["9", "12", "13", "4", "6", "2", "1", "0", "-2", "10"],
@@ -20,65 +26,68 @@ PARAMETERS = {
     "task_type": ["ALL"],
 }
 
-HEADERS = {"Authorization": f"Key {REDASH_API_KEY}"}
 
+# ── FETCH REDASH DATA ──────────────────────────────────────────
 
-def refresh_and_get_rows():
-    """Trigger a fresh query execution and return all rows."""
+def fetch_redash():
+    """
+    POST to /api/queries/{id}/results with max_age=0 to trigger fresh execution.
+    If result is cached, returns immediately.
+    If a job is queued, re-POST with max_age=60 until result is ready.
+    Works entirely with API key auth — no session cookie or /api/jobs polling needed.
+    """
+    headers = {
+        "Authorization": f"Key {REDASH_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    url = f"{REDASH_BASE}/api/queries/{REDASH_QUERY_ID}/results"
+    payload = {"parameters": PARAMETERS, "max_age": 0}
+
     print("Triggering Redash query refresh...")
-    resp = requests.post(
-        f"{REDASH_URL}/api/queries/{QUERY_ID}/results",
-        headers=HEADERS,
-        json={"parameters": PARAMETERS, "max_age": 0},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    print(f"POST status: {r.status_code}")
+    if r.status_code not in (200, 201):
+        print(f"Response: {r.text[:500]}")
+    r.raise_for_status()
+    resp = r.json()
 
-    if "query_result" in data:
-        return data["query_result"]["data"]["rows"]
+    # Immediate cached result
+    if "query_result" in resp:
+        rows = resp["query_result"]["data"]["rows"]
+        print(f"Got immediate result: {len(rows)} rows")
+        return rows
 
-    job_id = data["job"]["id"]
-    return _poll_job(job_id)
+    # Job queued — re-POST with max_age=60 to get result when ready
+    job_id = resp.get("job", {}).get("id", "unknown")
+    print(f"Query job queued (id={job_id}), polling for result...")
 
+    poll_payload = {**payload, "max_age": 60}
 
-def _poll_job(job_id):
-    """Poll Redash job until complete, then return rows."""
-    print(f"Polling job {job_id}...")
-    for attempt in range(60):
-        resp = requests.get(
-            f"{REDASH_URL}/api/jobs/{job_id}", headers=HEADERS, timeout=15
-        )
-        resp.raise_for_status()
-        job = resp.json()["job"]
-        status = job["status"]
-
-        if status == 3:  # success
-            result_id = job["query_result_id"]
-            print(f"Job done — result ID: {result_id}")
-            return _fetch_result(result_id)
-        elif status == 4:  # error
-            raise RuntimeError(f"Redash query failed: {job.get('error')}")
-
-        print(f"  attempt {attempt + 1}: status={status}, waiting...")
+    for attempt in range(20):
         time.sleep(3)
+        print(f"  Poll attempt {attempt + 1}/20...")
+        r2 = requests.post(url, headers=headers, json=poll_payload, timeout=30)
+        if r2.status_code not in (200, 201):
+            print(f"  Poll status {r2.status_code}: {r2.text[:200]}")
+            continue
+        resp2 = r2.json()
+        if "query_result" in resp2:
+            rows = resp2["query_result"]["data"]["rows"]
+            print(f"  Got result: {len(rows)} rows")
+            return rows
+        new_job = resp2.get("job", {})
+        print(f"  Still running, job status={new_job.get('status')}")
 
-    raise TimeoutError("Timed out waiting for Redash query results")
+    raise Exception("Timed out waiting for Redash query result after 60 seconds")
 
 
-def _fetch_result(result_id):
-    resp = requests.get(
-        f"{REDASH_URL}/api/query_results/{result_id}", headers=HEADERS, timeout=30
-    )
-    resp.raise_for_status()
-    return resp.json()["query_result"]["data"]["rows"]
-
+# ── FILTER & AGGREGATE ─────────────────────────────────────────
 
 def filter_and_aggregate(rows):
     """
-    Filter checks with Age >= 14 days (deduplicated by Check ID),
-    then group by Verification x Verification Type.
-    Returns: (grouped_counts dict, total_aged, total_all)
+    Deduplicate by Check ID, filter Age >= 14 days,
+    group by Verification x Verification Type.
     """
     all_checks = {}
     for row in rows:
@@ -90,15 +99,15 @@ def filter_and_aggregate(rows):
 
     total_all = len(all_checks)
 
-    aged_checks = {
+    aged = {
         cid: row
         for cid, row in all_checks.items()
         if (row.get("Age") or 0) >= AGE_THRESHOLD
     }
-    total_aged = len(aged_checks)
+    total_aged = len(aged)
 
     groups = defaultdict(lambda: defaultdict(int))
-    for row in aged_checks.values():
+    for row in aged.values():
         verification = (row.get("Verification") or "UNKNOWN").upper()
         v_type = (row.get("Verification Type") or "N/A").upper()
         groups[verification][v_type] += 1
@@ -106,11 +115,14 @@ def filter_and_aggregate(rows):
     return dict(groups), total_aged, total_all
 
 
-def build_slack_message(groups, total_aged, total_all):
-    today = datetime.now().strftime("%d %b %Y")
+# ── BUILD SLACK MESSAGE ────────────────────────────────────────
+
+def build_message(groups, total_aged, total_all):
+    now = datetime.now(IST)
+    today = now.strftime("%d %b %Y")
 
     lines = [
-        f"*:bar_chart: Daily Case Update — {today}*",
+        f"*:bar_chart: Daily Case Update \u2014 {today}*",
         f"*Cases \u226514 days:* `{total_aged}` of `{total_all}` active checks",
         "",
     ]
@@ -122,7 +134,7 @@ def build_slack_message(groups, total_aged, total_all):
         header = f"{'Verification':<{col1}} {'Type':<{col2}} {'Count':>{col3}}"
         divider = "-" * (col1 + col2 + col3 + 2)
 
-        table_lines = [header, divider]
+        table = [header, divider]
         grand_total = 0
 
         for verification in sorted(groups):
@@ -132,72 +144,63 @@ def build_slack_message(groups, total_aged, total_all):
             first = True
             for v_type in sorted(sub):
                 count = sub[v_type]
-                v_label = verification if first else ""
-                table_lines.append(
-                    f"{v_label:<{col1}} {v_type:<{col2}} {count:>{col3}}"
-                )
+                label = verification if first else ""
+                table.append(f"{label:<{col1}} {v_type:<{col2}} {count:>{col3}}")
                 first = False
             if len(sub) > 1:
-                table_lines.append(
-                    f"{'':>{col1}} {'Subtotal':<{col2}} {sub_total:>{col3}}"
-                )
-            table_lines.append("")
+                table.append(f"{'':>{col1}} {'Subtotal':<{col2}} {sub_total:>{col3}}")
+            table.append("")
 
-        table_lines.append(divider)
-        table_lines.append(
-            f"{'GRAND TOTAL':<{col1 + col2 + 1}} {grand_total:>{col3}}"
-        )
+        table.append(divider)
+        table.append(f"{'GRAND TOTAL':<{col1 + col2 + 1}} {grand_total:>{col3}}")
 
         lines.append("```")
-        lines.extend(table_lines)
+        lines.extend(table)
         lines.append("```")
 
     lines.append("")
     lines.append(
-        "cc: *@svin-ops-teamspocs* — please review and share your updates. :pray:"
+        "CC: <!subteam^S08T66C76CS> \u2014 please review and share your updates. :pray:"
     )
 
     return "\n".join(lines)
 
 
-def send_to_slack(message):
-    resp = requests.post(
+# ── POST TO SLACK ──────────────────────────────────────────────
+
+def post_slack(text):
+    r = requests.post(
         "https://slack.com/api/chat.postMessage",
         headers={
-            "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+            "Authorization": f"Bearer {SLACK_TOKEN}",
             "Content-Type": "application/json",
         },
-        json={
-            "channel": SLACK_CHANNEL,
-            "text": message,
-            "mrkdwn": True,
-        },
+        json={"channel": OPS_CHANNEL_ID, "text": text, "mrkdwn": True},
         timeout=15,
     )
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("ok"):
-        raise RuntimeError(f"Slack API error: {result.get('error')}")
-    print(f"Message sent. ts={result['ts']}")
-    return result
+    r.raise_for_status()
+    resp = r.json()
+    if not resp.get("ok"):
+        raise Exception(f"Slack API error: {resp.get('error')}")
+    print(f"Message sent. ts={resp['ts']}")
+    return resp["ts"]
 
+
+# ── MAIN ───────────────────────────────────────────────────────
 
 def main():
-    rows = refresh_and_get_rows()
-    print(f"Total rows fetched: {len(rows)}")
+    rows = fetch_redash()
+    print(f"Total rows: {len(rows)}")
 
     groups, total_aged, total_all = filter_and_aggregate(rows)
-    print(f"Unique checks: {total_all} total, {total_aged} aged >=14 days")
-    for v, sub in sorted(groups.items()):
-        for vt, cnt in sorted(sub.items()):
-            print(f"  {v} / {vt}: {cnt}")
+    print(f"Unique checks: {total_all}, aged >=14 days: {total_aged}")
 
-    message = build_slack_message(groups, total_aged, total_all)
-    print("\n--- Slack message preview ---")
+    message = build_message(groups, total_aged, total_all)
+    print("\n--- Slack preview ---")
     print(message)
-    print("-----------------------------\n")
+    print("---------------------\n")
 
-    send_to_slack(message)
+    post_slack(message)
 
 
 if __name__ == "__main__":
