@@ -3,13 +3,13 @@ name: Daily Case Report - sv-in-ops
 on:
   schedule:
     - cron: "30 3 * * *"   # 9:00 AM IST (UTC+5:30)
-  workflow_dispatch:        # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
 
 jobs:
   send-report:
     name: Send 9 AM Case Update to Slack
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -25,7 +25,5 @@ jobs:
 
       - name: Run daily report
         env:
-          REDASH_API_KEY: ${{ secrets.REDASH_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL: CF0RH10M8
         run: python report.py
