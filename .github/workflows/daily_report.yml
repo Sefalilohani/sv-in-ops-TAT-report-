@@ -1,4 +1,4 @@
-name: Daily Case Report — #sv-in-ops
+name: Daily Case Report - sv-in-ops
 
 on:
   schedule:
@@ -27,5 +27,5 @@ jobs:
         env:
           REDASH_API_KEY: ${{ secrets.REDASH_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL: CF0RH10M8   # #sv-in-ops
+          SLACK_CHANNEL: CF0RH10M8
         run: python report.py
