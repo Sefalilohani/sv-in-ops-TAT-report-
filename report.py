@@ -8,8 +8,7 @@ REDASH_URL = "https://redash.springworks.in"
 REDASH_API_KEY = os.environ["REDASH_API_KEY"]
 _raw_slack_token = os.environ["SLACK_BOT_TOKEN"]
 SLACK_BOT_TOKEN = "xoxb" + _raw_slack_token[4:]  # fix autocapitalisation of first letter
-SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "C0AGRE19V6U")  #testing-sefali
-
+SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "CF0RH10M8")  # #sv-in-ops
 QUERY_ID = 1420
 AGE_THRESHOLD = 14  # days
 
