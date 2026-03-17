@@ -13,7 +13,7 @@ REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 1420
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "CF0RH10M8"  # #sv-in-ops
+OPS_CHANNEL_ID = "C0AGRE19V6U"  # testing-sefali
 
 AGE_THRESHOLD = 14  # days
 
