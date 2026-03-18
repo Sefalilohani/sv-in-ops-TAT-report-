@@ -2,8 +2,10 @@ name: Daily Case Report - sv-in-ops
 
 on:
   schedule:
-    - cron: "30 3 * * *"   # 9:00 AM IST (UTC+5:30)
+    - cron: "30 3 * * *"   # 9:00 AM IST (fallback)
   workflow_dispatch:
+  repository_dispatch:
+    types: [run-tat-report]
 
 jobs:
   send-report:
