@@ -13,7 +13,7 @@ REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 1822
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "C0AGRE19V6U"
+OPS_CHANNEL_ID = "CF0RH10M8"
 
 AGE_THRESHOLD_HIGH = 14   # days — "14+ days"
 AGE_THRESHOLD_LOW  = 7    # days — "7-14 days"
