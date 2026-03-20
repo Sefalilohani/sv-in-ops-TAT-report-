@@ -24,6 +24,7 @@ PARAMETERS = {
     "client_priority": ["ALL"],
     "task_status": ["PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"],
     "task_type": ["ALL"],
+    "verification": ["ALL"],
 }
 
 AUTH_HEADERS = {
