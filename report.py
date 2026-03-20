@@ -10,12 +10,13 @@ _raw_token = os.environ["SLACK_BOT_TOKEN"]
 SLACK_TOKEN = "xoxb" + _raw_token[4:31] + "bFqMGfkmHBzvLRtU1It2ptnt"  # hardcode prefix+suffix; only numeric middle from secret
 
 REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
-REDASH_QUERY_ID = 1420
+REDASH_QUERY_ID = 1822
 REDASH_BASE = "https://redash.springworks.in"
 
 OPS_CHANNEL_ID = "C0AGRE19V6U"
 
-AGE_THRESHOLD = 14  # days
+AGE_THRESHOLD_HIGH = 14   # days — "14+ days"
+AGE_THRESHOLD_LOW  = 7    # days — "7-14 days"
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -36,11 +37,6 @@ AUTH_HEADERS = {
 # ── FETCH REDASH DATA ──────────────────────────────────────────
 
 def fetch_redash():
-    """
-    POST max_age=0 to trigger fresh execution.
-    Poll /api/jobs/{id} until complete (up to 5 minutes).
-    Then fetch result from /api/query_results/{id}.
-    """
     url = f"{REDASH_BASE}/api/queries/{REDASH_QUERY_ID}/results"
     payload = {"parameters": PARAMETERS, "max_age": 0}
 
@@ -58,11 +54,11 @@ def fetch_redash():
         print(f"Got immediate result: {len(rows)} rows")
         return rows
 
-    # Job queued — poll /api/jobs/{job_id} directly
+    # Job queued — poll /api/jobs/{job_id}
     job_id = resp["job"]["id"]
     print(f"Query job queued (id={job_id}), polling /api/jobs/...")
 
-    for attempt in range(100):  # up to ~5 minutes (100 x 3s)
+    for attempt in range(100):  # up to ~5 minutes
         time.sleep(3)
         jr = requests.get(
             f"{REDASH_BASE}/api/jobs/{job_id}",
@@ -95,7 +91,6 @@ def fetch_redash():
 
 # ── FILTER & AGGREGATE ─────────────────────────────────────────
 
-# Check Status codes from Redash URL
 VALID_TASK_STATUSES = {"PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"}
 
 
@@ -113,67 +108,100 @@ def filter_and_aggregate(rows):
 
     total_all = len(all_checks)
 
-    aged = {
-        cid: row
-        for cid, row in all_checks.items()
-        if (row.get("Age") or 0) >= AGE_THRESHOLD
-    }
-    total_aged = len(aged)
+    # Buckets
+    high_aged = {}   # 14+ days
+    low_aged  = {}   # 7-14 days
 
-    groups = defaultdict(lambda: defaultdict(int))
-    for row in aged.values():
+    for cid, row in all_checks.items():
+        age = row.get("Age") or 0
+        if age >= AGE_THRESHOLD_HIGH:
+            high_aged[cid] = row
+        elif age >= AGE_THRESHOLD_LOW:
+            low_aged[cid] = row
+
+    total_high = len(high_aged)
+    total_low  = len(low_aged)
+
+    # Group by Verification + Verification Type for both buckets
+    groups_high = defaultdict(lambda: defaultdict(int))
+    groups_low  = defaultdict(lambda: defaultdict(int))
+
+    for row in high_aged.values():
         verification = (row.get("Verification") or "UNKNOWN").upper()
         v_type = (row.get("Verification Type") or "N/A").upper()
-        groups[verification][v_type] += 1
+        groups_high[verification][v_type] += 1
 
-    return dict(groups), total_aged, total_all
+    for row in low_aged.values():
+        verification = (row.get("Verification") or "UNKNOWN").upper()
+        v_type = (row.get("Verification Type") or "N/A").upper()
+        groups_low[verification][v_type] += 1
+
+    return dict(groups_high), dict(groups_low), total_high, total_low, total_all
 
 
 # ── BUILD SLACK MESSAGE ────────────────────────────────────────
 
-def build_message(groups, total_aged, total_all):
+def build_message(groups_high, groups_low, total_high, total_low, total_all):
     today = datetime.now(IST).strftime("%d %b %Y")
 
     lines = [
-        f"*:bar_chart: Daily Case Update \u2014 {today}*",
-        f"*Cases \u226514 days:* `{total_aged}` of `{total_all}` active checks",
+        f":bar_chart: *TAT Case Update - {today}*",
+        f"*Cases 14+ days:* `{total_high}` | *Cases 7-14 days:* `{total_low}` | *Total active checks:* `{total_all}`",
         "",
     ]
 
-    if not groups:
-        lines.append("_No cases found with age \u226514 days._")
+    # Combine all verification keys
+    all_verifications = sorted(set(list(groups_high.keys()) + list(groups_low.keys())))
+
+    if not all_verifications:
+        lines.append("_No cases found with age >=7 days._")
     else:
-        col1, col2, col3 = 22, 20, 7
-        header = f"{'Verification':<{col1}} {'Type':<{col2}} {'Count':>{col3}}"
-        divider = "-" * (col1 + col2 + col3 + 2)
+        c1, c2, c3, c4 = 20, 20, 10, 10
+        header  = f"{'Verification':<{c1}} {'Type':<{c2}} {'14+ days':>{c3}}  {'7-14 days':>{c4}}"
+        divider = "-" * (c1 + c2 + c3 + c4 + 4)
 
         table = [header, divider]
-        grand_total = 0
+        grand_high = 0
+        grand_low  = 0
 
-        for verification in sorted(groups):
-            sub = groups[verification]
-            sub_total = sum(sub.values())
-            grand_total += sub_total
+        for verification in all_verifications:
+            sub_high = groups_high.get(verification, {})
+            sub_low  = groups_low.get(verification, {})
+            all_types = sorted(set(list(sub_high.keys()) + list(sub_low.keys())))
+
+            sub_total_high = sum(sub_high.values())
+            sub_total_low  = sum(sub_low.values())
+            grand_high += sub_total_high
+            grand_low  += sub_total_low
+
             first = True
-            for v_type in sorted(sub):
-                count = sub[v_type]
+            for v_type in all_types:
+                h = sub_high.get(v_type, 0)
+                l = sub_low.get(v_type, 0)
                 label = verification if first else ""
-                table.append(f"{label:<{col1}} {v_type:<{col2}} {count:>{col3}}")
+                table.append(f"{label:<{c1}} {v_type:<{c2}} {h:>{c3}}  {l:>{c4}}")
                 first = False
-            if len(sub) > 1:
-                table.append(f"{'':>{col1}} {'Subtotal':<{col2}} {sub_total:>{col3}}")
+
+            if len(all_types) > 1:
+                table.append(
+                    f"{'':>{c1}} {'Subtotal':<{c2}} {sub_total_high:>{c3}}  {sub_total_low:>{c4}}"
+                )
             table.append("")
 
         table.append(divider)
-        table.append(f"{'GRAND TOTAL':<{col1 + col2 + 1}} {grand_total:>{col3}}")
+        table.append(
+            f"{'GRAND TOTAL':<{c1 + c2 + 1}} {grand_high:>{c3}}  {grand_low:>{c4}}"
+        )
 
         lines.append("```")
         lines.extend(table)
         lines.append("```")
 
     lines.append("")
+    lines.append(f"<https://redash.springworks.in/queries/1822|View on Redash>")
+    lines.append("")
     lines.append(
-        "CC: <!subteam^S08T66C76CS> \u2014 please review and share your updates. :pray:"
+        "<!subteam^S04K9859L64> Please review and share an update on 14+ days checks."
     )
 
     return "\n".join(lines)
@@ -205,10 +233,10 @@ def main():
     rows = fetch_redash()
     print(f"Total rows: {len(rows)}")
 
-    groups, total_aged, total_all = filter_and_aggregate(rows)
-    print(f"Unique checks: {total_all}, aged >=14 days: {total_aged}")
+    groups_high, groups_low, total_high, total_low, total_all = filter_and_aggregate(rows)
+    print(f"Unique checks: {total_all}, 14+ days: {total_high}, 7-14 days: {total_low}")
 
-    message = build_message(groups, total_aged, total_all)
+    message = build_message(groups_high, groups_low, total_high, total_low, total_all)
     print("\n--- Slack preview ---")
     print(message)
     print("---------------------\n")
