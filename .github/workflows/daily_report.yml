@@ -1,18 +1,15 @@
 name: Daily Case Report - sv-in-ops
-
 on:
   schedule:
     - cron: "30 3 * * *"   # 9:00 AM IST (fallback)
   workflow_dispatch:
   repository_dispatch:
     types: [run-tat-report]
-
 jobs:
   send-report:
     name: Send 9 AM Case Update to Slack
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +21,19 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Debug token shape
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          echo "Token length: ${#SLACK_BOT_TOKEN}"
+          echo "First 8 chars:  ${SLACK_BOT_TOKEN:0:8}"
+          echo "Chars  8-16:    ${SLACK_BOT_TOKEN:8:8}"
+          echo "Chars 16-24:    ${SLACK_BOT_TOKEN:16:8}"
+          echo "Chars 24-32:    ${SLACK_BOT_TOKEN:24:8}"
+          echo "Chars 32-40:    ${SLACK_BOT_TOKEN:32:8}"
+          echo "Chars 40-48:    ${SLACK_BOT_TOKEN:40:8}"
+          echo "Last 8 chars:   ${SLACK_BOT_TOKEN: -8}"
 
       - name: Run daily report
         env:
