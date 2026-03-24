@@ -113,7 +113,7 @@ def filter_and_aggregate(rows):
     low_aged  = {}   # 7-14 days
 
     for cid, row in all_checks.items():
-        age = row.get("Age") or 0
+        age = row.get("NET TAT") or 0
         if age >= AGE_THRESHOLD_HIGH:
             high_aged[cid] = row
         elif age >= AGE_THRESHOLD_LOW:
