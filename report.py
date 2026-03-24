@@ -94,49 +94,46 @@ def fetch_redash():
 VALID_TASK_STATUSES = {"PENDING", "ASSIGNMENT_PENDING", "SCHEDULED"}
 
 
-def filter_and_aggregate(rows):
-    all_checks = {}
-    for row in rows:
-        cid = row.get("Check ID")
-        if cid is None:
-            continue
-        task_status = (row.get("Task Status") or "").upper()
-        if task_status not in VALID_TASK_STATUSES:
-            continue
-        if cid not in all_checks:
-            all_checks[cid] = row
+def filter_and_aggregate(rows):                                                                                                                                                                                                                                                    all_checks = {}
+      for row in rows:
+          cid = row.get("Check ID")
+          if cid is None:
+              continue
+          task_status = (row.get("Task Status") or "").upper()
+          if task_status not in VALID_TASK_STATUSES:
+              continue
+          if cid not in all_checks:
+              all_checks[cid] = row
 
-    total_all = len(all_checks)
+      total_all = len(all_checks)
 
-    # Buckets
-    high_aged = {}   # 14+ days
-    low_aged  = {}   # 7-14 days
+      high_aged = {}
+      low_aged  = {}
 
-    for cid, row in all_checks.items():
-        age = row.get("NeT TAT") or 0
-        if age >= AGE_THRESHOLD_HIGH:
-            high_aged[cid] = row
-        elif age >= AGE_THRESHOLD_LOW:
-            low_aged[cid] = row
+      for cid, row in all_checks.items():
+          age = row.get("Net TAT") or 0      # ← fixed: was "NeT TAT"
+          if age >= AGE_THRESHOLD_HIGH:
+              high_aged[cid] = row
+          elif age >= AGE_THRESHOLD_LOW:
+              low_aged[cid] = row
 
-    total_high = len(high_aged)
-    total_low  = len(low_aged)
+      total_high = len(high_aged)
+      total_low  = len(low_aged)
 
-    # Group by Verification + Verification Type for both buckets
-    groups_high = defaultdict(lambda: defaultdict(int))
-    groups_low  = defaultdict(lambda: defaultdict(int))
+      groups_high = defaultdict(lambda: defaultdict(int))
+      groups_low  = defaultdict(lambda: defaultdict(int))
 
-    for row in high_aged.values():
-        verification = (row.get("Verification") or "UNKNOWN").upper()
-        v_type = (row.get("Verification Type") or "N/A").upper()
-        groups_high[verification][v_type] += 1
+      for row in high_aged.values():
+          verification = (row.get("Verification") or "UNKNOWN").upper()
+          v_type = (row.get("Verification Type") or "N/A").upper()
+          groups_high[verification][v_type] += 1
 
-    for row in low_aged.values():
-        verification = (row.get("Verification") or "UNKNOWN").upper()
-        v_type = (row.get("Verification Type") or "N/A").upper()
-        groups_low[verification][v_type] += 1
+      for row in low_aged.values():
+          verification = (row.get("Verification") or "UNKNOWN").upper()
+          v_type = (row.get("Verification Type") or "N/A").upper()
+          groups_low[verification][v_type] += 1
 
-    return dict(groups_high), dict(groups_low), total_high, total_low, total_all
+      return dict(groups_high), dict(groups_low), total_high, total_low, total_all
 
 
 # ── BUILD SLACK MESSAGE ────────────────────────────────────────
