@@ -15,8 +15,9 @@ REDASH_BASE = "https://redash.springworks.in"
 
 OPS_CHANNEL_ID = "CF0RH10M8"
 
-AGE_THRESHOLD_HIGH = 14
-AGE_THRESHOLD_LOW  = 7
+AGE_THRESHOLD_HIGH      = 14
+AGE_THRESHOLD_LOW       = 7
+AGE_THRESHOLD_VERY_HIGH = 60
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -98,8 +99,9 @@ def filter_and_aggregate(rows):
 
     total_all = len(all_checks)
 
-    high_aged = {}
-    low_aged  = {}
+    high_aged      = {}
+    low_aged       = {}
+    very_high_aged = {}
 
     for cid, row in all_checks.items():
         age = row.get("Net TAT") or 0
@@ -107,12 +109,15 @@ def filter_and_aggregate(rows):
             high_aged[cid] = row
         elif age >= AGE_THRESHOLD_LOW:
             low_aged[cid] = row
+        if age >= AGE_THRESHOLD_VERY_HIGH:
+            very_high_aged[cid] = row
 
     total_high = len(high_aged)
     total_low  = len(low_aged)
 
-    groups_high = defaultdict(lambda: defaultdict(int))
-    groups_low  = defaultdict(lambda: defaultdict(int))
+    groups_high      = defaultdict(lambda: defaultdict(int))
+    groups_low       = defaultdict(lambda: defaultdict(int))
+    groups_very_high = defaultdict(lambda: defaultdict(int))
 
     for row in high_aged.values():
         verification = (row.get("Verification") or "UNKNOWN").upper()
@@ -124,70 +129,107 @@ def filter_and_aggregate(rows):
         v_type = (row.get("Verification Type") or "N/A").upper()
         groups_low[verification][v_type] += 1
 
-    return dict(groups_high), dict(groups_low), total_high, total_low, total_all
+    for row in very_high_aged.values():
+        verification = (row.get("Verification") or "UNKNOWN").upper()
+        v_type = (row.get("Verification Type") or "N/A").upper()
+        groups_very_high[verification][v_type] += 1
+
+    return dict(groups_high), dict(groups_low), dict(groups_very_high), total_high, total_low, total_all
 
 
 # ── BUILD SLACK MESSAGE ────────────────────────────────────────
 
-def build_message(groups_high, groups_low, total_high, total_low, total_all):
+# Maps a raw "Verification" value to the team section it's reported under,
+# and a raw "Verification Type" value to its display label + second metric
+# within that section. metric "low" pairs 14+ with the 7+ bucket; "very_high"
+# pairs 14+ with the 60+ bucket instead.
+DEFAULT_TYPE_CONFIG = {"label": "Other", "metric": "low"}
+
+TEAM_SECTIONS = [
+    {
+        "verification": "EMP",
+        "label": "EMP",
+        "mentions": ["<@UN1E2L4G0>", "<@UURRMS3MG>"],  # Selva, Shalini
+        "type_config": None,  # totals only, no per-type breakdown
+    },
+    {
+        "verification": "REF",
+        "label": "REF",
+        "mentions": ["<@UN1E2L4G0>", "<@U07PNP1L9C4>"],  # Selva, Nazia
+        "type_config": None,
+    },
+    {
+        "verification": "ADD",
+        "label": "ADD",
+        "mentions": ["<@U03BUG17X54>", "<@U04GVAGFE1E>", "<@U08JSQ1LBFG>", "<@U08Q8ML3DBK>"],  # Ramya, Deepika, Durga, Aishwarya
+        "type_config": {
+            "DIGITAL": {"label": "DAV", "metric": "low"},
+            "PHYSICAL": {"label": "PAV", "metric": "low"},
+            "POSTAL": {"label": "Postal", "metric": "low"},
+        },
+    },
+    {
+        "verification": "EDU",
+        "label": "EDU",
+        "mentions": ["<@U04CBSJ1XL1>", "<@U08Q8ML3DBK>", "<@U08JSQ1LBFG>"],  # Navaneetha KS, Aishwarya, Durga
+        "type_config": {
+            "REGIONAL_PARTNER": {"label": "Regional", "metric": "low"},
+            "OFFICIAL": {"label": "Official", "metric": "very_high"},
+            "HYBRID": {"label": "Hybrid", "metric": "very_high"},
+        },
+    },
+]
+MISC_MENTIONS = ["<@U017K6KQT2A>"]  # Thanveer
+MAPPED_VERIFICATIONS = {section["verification"] for section in TEAM_SECTIONS}
+
+
+def build_message(groups_high, groups_low, groups_very_high, total_high, total_low, total_all):
     today = datetime.now(IST).strftime("%d %b %Y")
 
     lines = [
-        f":bar_chart: *TAT Case Update - {today}*",
-        f"*Cases 14+ days:* `{total_high}` | *Cases 7-14 days:* `{total_low}` | *Total active checks:* `{total_all}`",
+        f":bar_chart: TAT Case Update - {today}",
+        "",
+        f"Cases 14+ days: {total_high}",
+        f"Cases 7+ days: {total_low}",
         "",
     ]
 
-    all_verifications = sorted(set(list(groups_high.keys()) + list(groups_low.keys())))
+    for section in TEAM_SECTIONS:
+        verification = section["verification"]
+        sub_high = groups_high.get(verification, {})
+        sub_low = groups_low.get(verification, {})
+        sub_very_high = groups_very_high.get(verification, {})
 
-    if not all_verifications:
-        lines.append("_No cases found with age >=7 days._")
-    else:
-        c1, c2, c3, c4 = 20, 20, 10, 10
-        header  = f"{'Verification':<{c1}} {'Type':<{c2}} {'14+ days':>{c3}}  {'7-14 days':>{c4}}"
-        divider = "-" * (c1 + c2 + c3 + c4 + 4)
+        lines.append(f"{section['label']} - {' '.join(section['mentions'])}")
 
-        table = [header, divider]
-        grand_high = 0
-        grand_low  = 0
-
-        for verification in all_verifications:
-            sub_high = groups_high.get(verification, {})
-            sub_low  = groups_low.get(verification, {})
-            all_types = sorted(set(list(sub_high.keys()) + list(sub_low.keys())))
-
-            sub_total_high = sum(sub_high.values())
-            sub_total_low  = sum(sub_low.values())
-            grand_high += sub_total_high
-            grand_low  += sub_total_low
-
-            first = True
+        if section["type_config"] is None:
+            h = sum(sub_high.values())
+            l = sum(sub_low.values())
+            lines.append(f"14+ days - {h} , 7+ days - {l}")
+        else:
+            all_types = sorted(set(list(sub_high.keys()) + list(sub_low.keys()) + list(sub_very_high.keys())))
             for v_type in all_types:
+                config = section["type_config"].get(v_type, DEFAULT_TYPE_CONFIG)
                 h = sub_high.get(v_type, 0)
-                l = sub_low.get(v_type, 0)
-                label = verification if first else ""
-                table.append(f"{label:<{c1}} {v_type:<{c2}} {h:>{c3}}  {l:>{c4}}")
-                first = False
+                if config["metric"] == "very_high":
+                    second_label, second_val = "60+ days", sub_very_high.get(v_type, 0)
+                else:
+                    second_label, second_val = "7+ days", sub_low.get(v_type, 0)
+                lines.append(f"{config['label']} - 14+ days - {h} , {second_label} - {second_val}")
+        lines.append("")
 
-            if len(all_types) > 1:
-                table.append(
-                    f"{'':>{c1}} {'Subtotal':<{c2}} {sub_total_high:>{c3}}  {sub_total_low:>{c4}}"
-                )
-            table.append("")
-
-        table.append(divider)
-        table.append(
-            f"{'GRAND TOTAL':<{c1 + c2 + 1}} {grand_high:>{c3}}  {grand_low:>{c4}}"
-        )
-
-        lines.append("```")
-        lines.extend(table)
-        lines.append("```")
-
+    misc_high = sum(
+        count for v, sub in groups_high.items() if v not in MAPPED_VERIFICATIONS for count in sub.values()
+    )
+    misc_low = sum(
+        count for v, sub in groups_low.items() if v not in MAPPED_VERIFICATIONS for count in sub.values()
+    )
+    lines.append(f"MISC - {' '.join(MISC_MENTIONS)}")
+    lines.append(f"14+ days - {misc_high} , 7+ days - {misc_low}")
     lines.append("")
-    lines.append("<https://redash.springworks.in/queries/1822|View on Redash>")
     lines.append("")
-    lines.append("<!subteam^S04K9859L64> Please review and share an update on 14+ days checks.")
+
+    lines.append("Redash - https://redash.springworks.in/queries/1822")
 
     return "\n".join(lines)
 
@@ -218,10 +260,10 @@ def main():
     rows = fetch_redash()
     print(f"Total rows: {len(rows)}")
 
-    groups_high, groups_low, total_high, total_low, total_all = filter_and_aggregate(rows)
+    groups_high, groups_low, groups_very_high, total_high, total_low, total_all = filter_and_aggregate(rows)
     print(f"Unique checks: {total_all}, 14+ days: {total_high}, 7-14 days: {total_low}")
 
-    message = build_message(groups_high, groups_low, total_high, total_low, total_all)
+    message = build_message(groups_high, groups_low, groups_very_high, total_high, total_low, total_all)
     print("\n--- Slack preview ---")
     print(message)
     print("---------------------\n")
