@@ -10,7 +10,7 @@ _raw_token = os.environ["SLACK_BOT_TOKEN"]
 SLACK_TOKEN = "xoxb" + _raw_token[4:31] + "bFqMGfkmHBzvLRtU1It2ptnt"
 
 REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
-REDASH_QUERY_ID = 1822
+REDASH_QUERY_ID = 3464
 REDASH_BASE = "https://redash.springworks.in"
 
 OPS_CHANNEL_ID = "CF0RH10M8"
