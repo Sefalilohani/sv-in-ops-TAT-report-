@@ -229,7 +229,7 @@ def build_message(groups_high, groups_low, groups_very_high, total_high, total_l
     lines.append("")
     lines.append("")
 
-    lines.append("Redash - https://redash.springworks.in/queries/1822")
+    lines.append("Redash - https://redash.springworks.in/queries/3464")
 
     return "\n".join(lines)
 
