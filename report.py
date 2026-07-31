@@ -13,15 +13,19 @@ REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 3464
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "C0AGRE19V6U"
+OPS_CHANNEL_ID = "CF0RH10M8"
 
-AGE_THRESHOLD_HIGH      = 14
+# Days 8-14 are still "within" the 14-day TAT per Redash's own severity buckets
+# (8-14 is one band, 15-30 the next) — a case only truly breaches TAT at day 15.
+# The report label still reads "14+ days" by convention, but the boundary below
+# is the real breach point, matching Redash's bucket split.
+AGE_THRESHOLD_HIGH      = 15
 AGE_THRESHOLD_LOW       = 7
 AGE_THRESHOLD_VERY_HIGH = 60
 
-# "Nearly TAT" pulse: cases sitting exactly on the day before/at their section's
-# breach point. Standard sections breach at 14 days; EDU Official/Hybrid breach
-# at 60, so their nearing day is 59 (one day out) instead of 14.
+# "Nearly TAT" pulse: cases sitting exactly on the day before their section's
+# breach point. Standard sections breach at 15 days (nearing = 14); EDU
+# Official/Hybrid breach at 60 (nearing = 59).
 NEARING_STANDARD_DAY   = 14
 NEARING_VERY_HIGH_DAY  = 59
 
