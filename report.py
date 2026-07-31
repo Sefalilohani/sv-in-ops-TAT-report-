@@ -13,11 +13,17 @@ REDASH_API_KEY = "CWcvNsz8fkzifFJPD6r7kc2T6TCU6pbhxa0z0nRm"
 REDASH_QUERY_ID = 3464
 REDASH_BASE = "https://redash.springworks.in"
 
-OPS_CHANNEL_ID = "CF0RH10M8"
+OPS_CHANNEL_ID = "C0AGRE19V6U"
 
 AGE_THRESHOLD_HIGH      = 14
 AGE_THRESHOLD_LOW       = 7
 AGE_THRESHOLD_VERY_HIGH = 60
+
+# "Nearly TAT" pulse: cases sitting exactly on the day before/at their section's
+# breach point. Standard sections breach at 14 days; EDU Official/Hybrid breach
+# at 60, so their nearing day is 59 (one day out) instead of 14.
+NEARING_STANDARD_DAY   = 14
+NEARING_VERY_HIGH_DAY  = 59
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -118,11 +124,17 @@ def filter_and_aggregate(rows):
     groups_high      = defaultdict(lambda: defaultdict(int))
     groups_low       = defaultdict(lambda: defaultdict(int))
     groups_very_high = defaultdict(lambda: defaultdict(int))
+    groups_task_type = defaultdict(lambda: defaultdict(int))
+    groups_nearing_standard  = defaultdict(lambda: defaultdict(int))
+    groups_nearing_very_high = defaultdict(lambda: defaultdict(int))
 
     for row in high_aged.values():
         verification = (row.get("Verification") or "UNKNOWN").upper()
         v_type = (row.get("Verification Type") or "N/A").upper()
         groups_high[verification][v_type] += 1
+
+        task_type = (row.get("Task Type") or "N/A").strip() or "N/A"
+        groups_task_type[verification][task_type] += 1
 
     for row in low_aged.values():
         verification = (row.get("Verification") or "UNKNOWN").upper()
@@ -134,7 +146,23 @@ def filter_and_aggregate(rows):
         v_type = (row.get("Verification Type") or "N/A").upper()
         groups_very_high[verification][v_type] += 1
 
-    return dict(groups_high), dict(groups_low), dict(groups_very_high), total_high, total_low, total_all
+    for row in all_checks.values():
+        age = row.get("Net TAT") or 0
+        day = int(age)
+        if day == NEARING_STANDARD_DAY:
+            verification = (row.get("Verification") or "UNKNOWN").upper()
+            v_type = (row.get("Verification Type") or "N/A").upper()
+            groups_nearing_standard[verification][v_type] += 1
+        elif day == NEARING_VERY_HIGH_DAY:
+            verification = (row.get("Verification") or "UNKNOWN").upper()
+            v_type = (row.get("Verification Type") or "N/A").upper()
+            groups_nearing_very_high[verification][v_type] += 1
+
+    return (
+        dict(groups_high), dict(groups_low), dict(groups_very_high),
+        dict(groups_task_type), dict(groups_nearing_standard), dict(groups_nearing_very_high),
+        total_high, total_low, total_all,
+    )
 
 
 # ── BUILD SLACK MESSAGE ────────────────────────────────────────
@@ -183,7 +211,66 @@ MISC_MENTIONS = ["<@U017K6KQT2A>"]  # Thanveer
 MAPPED_VERIFICATIONS = {section["verification"] for section in TEAM_SECTIONS}
 
 
-def build_message(groups_high, groups_low, groups_very_high, total_high, total_low, total_all):
+def build_task_type_table(groups_task_type):
+    """Verification x Task Type pivot, 14+ days cases only, as a monospace table."""
+    verifications = sorted(groups_task_type.keys())
+    task_types = sorted({tt for sub in groups_task_type.values() for tt in sub})
+
+    header = ["Verification"] + task_types + ["Total"]
+    col_totals = defaultdict(int)
+    rows = []
+    for verification in verifications:
+        sub = groups_task_type[verification]
+        values = [sub.get(tt, 0) for tt in task_types]
+        for tt, val in zip(task_types, values):
+            col_totals[tt] += val
+        rows.append([verification] + [str(v) for v in values] + [str(sum(values))])
+
+    grand_total = sum(col_totals.values())
+    rows.append(["Total"] + [str(col_totals[tt]) for tt in task_types] + [str(grand_total)])
+
+    widths = [max(len(header[i]), *(len(r[i]) for r in rows)) for i in range(len(header))]
+
+    def fmt_row(r):
+        return " | ".join(val.ljust(widths[i]) for i, val in enumerate(r))
+
+    divider = "-+-".join("-" * w for w in widths)
+    table_lines = [fmt_row(header), divider] + [fmt_row(r) for r in rows]
+    return "```\n" + "\n".join(table_lines) + "\n```"
+
+
+def build_nearing_section(groups_nearing_standard, groups_nearing_very_high):
+    lines = [f"Below cases are nearly TAT (Currently {NEARING_STANDARD_DAY} days)"]
+
+    for section in TEAM_SECTIONS:
+        verification = section["verification"]
+        sub_standard = groups_nearing_standard.get(verification, {})
+
+        if section["type_config"] is None:
+            count = sum(sub_standard.values())
+            lines.append(f"{section['label']} - {count}")
+        else:
+            for v_type, config in section["type_config"].items():
+                if config["metric"] == "very_high":
+                    count = groups_nearing_very_high.get(verification, {}).get(v_type, 0)
+                    lines.append(f"{section['label']} {config['label']} ({NEARING_VERY_HIGH_DAY} days) - {count}")
+                else:
+                    count = sub_standard.get(v_type, 0)
+                    lines.append(f"{section['label']} {config['label']} - {count}")
+
+    misc_count = sum(
+        count for v, sub in groups_nearing_standard.items() if v not in MAPPED_VERIFICATIONS for count in sub.values()
+    )
+    lines.append(f"MISC - {misc_count}")
+
+    return "\n".join(lines)
+
+
+def build_message(
+    groups_high, groups_low, groups_very_high,
+    groups_task_type, groups_nearing_standard, groups_nearing_very_high,
+    total_high, total_low, total_all,
+):
     today = datetime.now(IST).strftime("%d %b %Y")
 
     lines = [
@@ -227,9 +314,15 @@ def build_message(groups_high, groups_low, groups_very_high, total_high, total_l
     lines.append(f"MISC - {' '.join(MISC_MENTIONS)}")
     lines.append(f"14+ days - {misc_high} , 7+ days - {misc_low}")
     lines.append("")
+
+    lines.append("Task Type breakdown - 14+ days cases only")
+    lines.append(build_task_type_table(groups_task_type))
     lines.append("")
 
-    lines.append("Redash - https://redash.springworks.in/queries/3464")
+    lines.append(build_nearing_section(groups_nearing_standard, groups_nearing_very_high))
+    lines.append("")
+
+    lines.append(f"Redash - {REDASH_BASE}/queries/{REDASH_QUERY_ID}")
 
     return "\n".join(lines)
 
@@ -260,10 +353,18 @@ def main():
     rows = fetch_redash()
     print(f"Total rows: {len(rows)}")
 
-    groups_high, groups_low, groups_very_high, total_high, total_low, total_all = filter_and_aggregate(rows)
+    (
+        groups_high, groups_low, groups_very_high,
+        groups_task_type, groups_nearing_standard, groups_nearing_very_high,
+        total_high, total_low, total_all,
+    ) = filter_and_aggregate(rows)
     print(f"Unique checks: {total_all}, 14+ days: {total_high}, 7-14 days: {total_low}")
 
-    message = build_message(groups_high, groups_low, groups_very_high, total_high, total_low, total_all)
+    message = build_message(
+        groups_high, groups_low, groups_very_high,
+        groups_task_type, groups_nearing_standard, groups_nearing_very_high,
+        total_high, total_low, total_all,
+    )
     print("\n--- Slack preview ---")
     print(message)
     print("---------------------\n")
