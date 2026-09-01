@@ -193,7 +193,7 @@ TEAM_SECTIONS = [
     {
         "verification": "ADD",
         "label": "ADD",
-        "mentions": ["<@U03BUG17X54>", "<@U04GVAGFE1E>", "<@U08JSQ1LBFG>", "<@U08Q8ML3DBK>"],  # Ramya, Deepika, Durga, Aishwarya
+        "mentions": ["<@U03BUG17X54>", "<@U04GVAGFE1E>", "<@U08JSQ1LBFG>", "<@U07MPT746TC>"],  # Ramya, Deepika, Durga, Kartik
         "type_config": {
             "DIGITAL": {"label": "DAV", "metric": "low"},
             "PHYSICAL": {"label": "PAV", "metric": "low"},
@@ -203,7 +203,7 @@ TEAM_SECTIONS = [
     {
         "verification": "EDU",
         "label": "EDU",
-        "mentions": ["<@U04CBSJ1XL1>", "<@U08Q8ML3DBK>", "<@U08JSQ1LBFG>"],  # Navaneetha KS, Aishwarya, Durga
+        "mentions": ["<@U04CBSJ1XL1>", "<@U07MPT746TC>", "<@U08JSQ1LBFG>"],  # Navaneetha KS, Kartik, Durga
         "type_config": {
             "REGIONAL_PARTNER": {"label": "Regional", "metric": "low"},
             "OFFICIAL": {"label": "Official", "metric": "very_high"},
@@ -211,7 +211,7 @@ TEAM_SECTIONS = [
         },
     },
 ]
-MISC_MENTIONS = ["<@U017K6KQT2A>"]  # Thanveer
+MISC_MENTIONS = ["<@U017K6KQT2A>","<@U08MNKZ9QQY>"]  # Thanveer, Samraggee
 MAPPED_VERIFICATIONS = {section["verification"] for section in TEAM_SECTIONS}
 
 
